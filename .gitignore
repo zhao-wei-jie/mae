@@ -1,0 +1,3 @@
+train.sh
+results/*
+__pycache__

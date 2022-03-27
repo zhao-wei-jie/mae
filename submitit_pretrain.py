@@ -8,6 +8,7 @@
 # --------------------------------------------------------
 
 import argparse
+import time
 import os
 import uuid
 from pathlib import Path
@@ -31,9 +32,9 @@ def parse_args():
 
 
 def get_shared_folder() -> Path:
-    user = os.getenv("USER")
-    if Path("/checkpoint/").is_dir():
-        p = Path(f"/checkpoint/{user}/experiments")
+    date = time.strftime('%Y%m%d_%H', time.localtime())
+    if Path("./results/").is_dir():
+        p = Path(os.path.abspath(f"./results/{date}/"))
         p.mkdir(exist_ok=True)
         return p
     raise RuntimeError("No shared folder available")
