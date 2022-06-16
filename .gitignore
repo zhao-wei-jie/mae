@@ -1,3 +1,5 @@
 train.sh
 results/*
+*.pth
+output_dir
 __pycache__

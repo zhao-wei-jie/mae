@@ -35,7 +35,7 @@ import models_mae
 from engine_pretrain import train_one_epoch
 
 from dataset import TTPLA_Dataset
-
+from test import evaluate
 
 def get_args_parser():
     parser = argparse.ArgumentParser('MAE pre-training', add_help=False)
@@ -51,6 +51,9 @@ def get_args_parser():
 
     parser.add_argument('--input_size', default=224, type=int,
                         help='images input size')
+
+    parser.add_argument('--seg_num', default=0, type=int,
+                        help='seg_num')
 
     parser.add_argument('--mask_ratio', default=0.75, type=float,
                         help='Masking ratio (percentage of removed patches).')
@@ -122,13 +125,38 @@ def main(args):
     cudnn.benchmark = True
 
     # simple augmentation
+    mean=[62.364 ,61.025 ,56.462]
+    std=[25.631 ,25.461 ,25.943]
+    mean = [m/255. for m in mean]
+    std = [s/255. for s in std]
     transform_train = transforms.Compose([
-            transforms.RandomResizedCrop(args.input_size, scale=(0.2, 1.0), interpolation=3),  # 3 is bicubic
+            # transforms.RandomResizedCrop(args.input_size, scale=(0.2, 1.0), interpolation=3),  # 3 is bicubic
+            transforms.Resize(args.input_size, interpolation=3),  # 3 is bicubic
+            transforms.RandomCrop(args.input_size),
             transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
+            transforms.Normalize(mean=mean, std=std)
+            # transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+            ])
     # dataset_train = datasets.ImageFolder(os.path.join(args.data_path, 'train'), transform=transform_train)
-    dataset_train = TTPLA_Dataset(split='self')
+    if args.seg_num>0:
+        split = 'self_finetune'
+        transform_train = transforms.Compose([
+        transforms.Resize([args.input_size]*2, interpolation=3),  # 3 is bicubic
+        transforms.ToTensor(),
+        transforms.Normalize(mean=mean, std=std)
+        ])
+        dataset_test = TTPLA_Dataset(split='self_finetune_eval',transform=transform_train)
+        data_loader_test = torch.utils.data.DataLoader(
+                    dataset_test, shuffle=False,
+                    batch_size=1,
+                    num_workers=args.num_workers,
+                    pin_memory=args.pin_mem,
+                    drop_last=False,
+        )
+    else:
+        split = 'self'
+    dataset_train = TTPLA_Dataset(split=split,transform=transform_train)
     print(dataset_train)
 
     if True:  # args.distributed:
@@ -154,9 +182,10 @@ def main(args):
         pin_memory=args.pin_mem,
         drop_last=True,
     )
-    
+
     # define the model
-    model = models_mae.__dict__[args.model](norm_pix_loss=args.norm_pix_loss)
+
+    model = models_mae.__dict__[args.model](norm_pix_loss=args.norm_pix_loss,seg_num=args.seg_num)
 
     model.to(device)
 
@@ -164,7 +193,7 @@ def main(args):
     print("Model = %s" % str(model_without_ddp))
 
     eff_batch_size = args.batch_size * args.accum_iter * misc.get_world_size()
-    
+
     if args.lr is None:  # only base_lr is specified
         args.lr = args.blr * eff_batch_size / 256
 
@@ -197,7 +226,7 @@ def main(args):
             log_writer=log_writer,
             args=args
         )
-        if args.output_dir and (epoch % 20 == 0 or epoch + 1 == args.epochs):
+        if args.output_dir and (epoch % 80 == 0 or epoch + 1 == args.epochs):
             misc.save_model(
                 args=args, model=model, model_without_ddp=model_without_ddp, optimizer=optimizer,
                 loss_scaler=loss_scaler, epoch=epoch)
@@ -210,6 +239,10 @@ def main(args):
                 log_writer.flush()
             with open(os.path.join(args.output_dir, "log.txt"), mode="a", encoding="utf-8") as f:
                 f.write(json.dumps(log_stats) + "\n")
+        if args.seg_num>0:
+            test_stats = evaluate(
+                data_loader_test, model, device, args, log_writer, epoch
+            )
 
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
@@ -219,6 +252,8 @@ def main(args):
 if __name__ == '__main__':
     args = get_args_parser()
     args = args.parse_args()
+    args.output_dir = args.output_dir+time.strftime('/%Y%m%d_%H%M', time.localtime())
+    args.log_dir = args.output_dir
     if args.output_dir:
         Path(args.output_dir).mkdir(parents=True, exist_ok=True)
     main(args)
